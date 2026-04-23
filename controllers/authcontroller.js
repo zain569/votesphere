@@ -66,6 +66,7 @@ router.post("/register", async (req, res) => {
             httpOnly: true,
             secure: false, // true ONLY if using HTTPS
             sameSite: "lax",
+            path: "/",
             maxAge: 7 * 24 * 60 * 60 * 1000
         });
 
@@ -128,6 +129,7 @@ router.post("/login", async (req, res) => {
             httpOnly: true,
             secure: false, // true ONLY if using HTTPS
             sameSite: "lax",
+            path: "/",
             maxAge: 7 * 24 * 60 * 60 * 1000
         })
 
