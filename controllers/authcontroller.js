@@ -1,21 +1,39 @@
 import express from "express";
-import Users from "../model/Users.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import { authMiddleware } from "./middlewares.js";
+import { pool } from "../db/pool.js";
 
 const router = express.Router();
 
-//Regsiter Users
+const createToken = (payload) =>
+    new Promise((resolve, reject) => {
+        jwt.sign(payload, process.env.SECRET_KEY, { expiresIn: "7d" }, (err, token) => {
+            if (err) {
+                reject(err);
+                return;
+            }
+            resolve(token);
+        });
+    });
+
+const getCookieOptions = () => {
+    const isProduction = process.env.NODE_ENV === "production";
+    return {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? "none" : "lax",
+        path: "/",
+        maxAge: 7 * 24 * 60 * 60 * 1000
+    };
+};
 
 router.post("/register", async (req, res) => {
     try {
         const { username, email, password } = req.body;
 
-        // Remove extra spaces and make sure we always work with strings.
-        const cleanUsername = username ? username.trim() : "";
-        const cleanEmail = email ? email.trim().toLowerCase() : "";
-        const cleanPassword = password ? password.trim() : "";
+        const cleanUsername = typeof username === "string" ? username.trim() : "";
+        const cleanEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
+        const cleanPassword = typeof password === "string" ? password.trim() : "";
 
         if (!cleanUsername || !cleanEmail || !cleanPassword) {
             return res.status(400).json({
@@ -24,9 +42,8 @@ router.post("/register", async (req, res) => {
             });
         }
 
-        //Check Can On this Email another User Exist
-        const userExist = await Users.findOne({ email: cleanEmail });
-        if (userExist) {
+        const userExistsByEmail = await pool.query("SELECT id FROM users WHERE email = $1", [cleanEmail]);
+        if (userExistsByEmail.rowCount > 0) {
             return res.status(400).json({
                 message: "Email you Enter is already registered with another account",
                 success: false,
@@ -34,9 +51,8 @@ router.post("/register", async (req, res) => {
             });
         }
 
-        //Check can anyone take this userName
-        const userNameTaken = await Users.findOne({ username: cleanUsername });
-        if (userNameTaken) {
+        const userExistsByUsername = await pool.query("SELECT id FROM users WHERE username = $1", [cleanUsername]);
+        if (userExistsByUsername.rowCount > 0) {
             return res.status(400).json({
                 message: "Username already taken",
                 success: false,
@@ -45,40 +61,28 @@ router.post("/register", async (req, res) => {
         }
 
         const hashedPassword = await bcrypt.hash(cleanPassword, 10);
+        const insertUser = await pool.query(
+            `
+            INSERT INTO users (username, email, password)
+            VALUES ($1, $2, $3)
+            RETURNING id, username, email
+            `,
+            [cleanUsername, cleanEmail, hashedPassword]
+        );
 
-        const user = await Users.create({
-            username: cleanUsername,
-            email: cleanEmail,
-            password: hashedPassword,
-        });
+        const user = insertUser.rows[0];
+        const token = await createToken({ email: user.email, id: user.id });
 
-        const token = await new Promise((resolve, reject) => {
-            jwt.sign({ email: user.email, id: user._id }, process.env.SECRET_KEY, { expiresIn: '7d' }, (err, token) => {
-                if (err) {
-                    return reject(err);
-                }
-
-                return resolve(token);
-            })
-        })
-
-        res.cookie("token", token, {
-            httpOnly: true,
-            secure: true,
-            sameSite: "none",
-            path: "/",
-            maxAge: 7 * 24 * 60 * 60 * 1000
-        });
+        res.cookie("token", token, getCookieOptions());
 
         return res.status(200).json({
             message: "User Registered Successfully",
             success: true,
             username: user.username,
-            id: user._id,
+            id: user.id
         });
     } catch (err) {
-        console.log(err);
-
+        console.error(err);
         return res.status(500).json({
             message: "Something went wrong while registering the user",
             success: false
@@ -86,66 +90,54 @@ router.post("/register", async (req, res) => {
     }
 });
 
-//----------login user----------
 router.post("/login", async (req, res) => {
     try {
         const { email, password } = req.body;
+        const cleanEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
+        const cleanPassword = typeof password === "string" ? password : "";
 
-        if (!email || !password) {
+        if (!cleanEmail || !cleanPassword) {
             return res.status(400).json({
                 message: "Check Email & Password",
                 success: false
-            })
+            });
         }
 
-        const user = await Users.findOne({ email });
-        if (!user) {
+        const userQuery = await pool.query("SELECT id, username, email, password FROM users WHERE email = $1", [cleanEmail]);
+        if (userQuery.rowCount === 0) {
             return res.status(400).json({
                 message: "Email Not found",
                 success: false
-            })
+            });
         }
 
-        const matchPassword = await bcrypt.compare(password, user.password);
+        const user = userQuery.rows[0];
+        const matchPassword = await bcrypt.compare(cleanPassword, user.password);
 
         if (!matchPassword) {
             return res.status(400).json({
                 message: "Check Email & Password",
                 success: false
-            })
+            });
         }
 
-        const token = await new Promise((resolve, reject) => {
-            jwt.sign({ email: user.email, id: user._id }, process.env.SECRET_KEY, { expiresIn: '7d' }, (err, token) => {
-                if (err) {
-                    return reject(err);
-                }
-
-                return resolve(token);
-            })
-        })
-
-        res.cookie("token", token, {
-            httpOnly: true,
-            secure: true,
-            sameSite: "none",
-            path: "/",
-            maxAge: 7 * 24 * 60 * 60 * 1000
-        })
+        const token = await createToken({ email: user.email, id: user.id });
+        res.cookie("token", token, getCookieOptions());
 
         return res.status(200).json({
             message: "Login Successfull",
             success: true,
             username: user.username,
-            id: user._id,
-        })
+            token: token,
+            id: user.id
+        });
     } catch (err) {
-        console.log(err);
+        console.error(err);
         return res.status(500).json({
             message: "Internal Server Error",
             success: false
-        })
+        });
     }
-})
+});
 
 export default router;

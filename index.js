@@ -1,35 +1,42 @@
-import express from "express"
-import cors from "cors"
-import dotenv from "dotenv"
-import mongoose from "mongoose";
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
-
-import authRoutes from "./controllers/authcontroller.js"
-import questionsRoutes from "./controllers/questions.js"
+import authRoutes from "./controllers/authController.js";
+import questionsRoutes from "./controllers/questionsController.js";
+import { pool } from "./db/pool.js";
+import { initializeDatabase } from "./db/initSchema.js";
 
 dotenv.config();
 
 const app = express();
+const port = Number(process.env.PORT) || 5470;
 
 app.use(cookieParser());
 app.use(express.json());
-app.use(cors({
-    origin: ["http://localhost:5173","https://votesphere1.netlify.app"],
-    credentials: true
-}));
+app.use(
+    cors({
+        origin: ["http://localhost:5173", "https://votesphere1.netlify.app"],
+        credentials: true
+    })
+);
 
-//connect database
-mongoose.connect(process.env.MONGODB_URL,{
-    dbName: 'Voting_app'
-})
-.then(() => console.log("MongoDB connected successfully🔌"))
-.catch((error) => console.log("MongoDb Connection failed📴", error));
-
-//Routes for Connect Frontend and backend
-
-app.use("/api/auth", authRoutes); 
+app.use("/api/auth", authRoutes);
 app.use("/api/questions", questionsRoutes);
 
-app.listen(process.env.PORT, () => {
-    console.log("Server is running on port", process.env.PORT);
-})
+const startServer = async () => {
+    try {
+        await pool.query("SELECT 1");
+        await initializeDatabase();
+        console.log("PostgreSQL connected successfully");
+
+        app.listen(port, () => {
+            console.log("Server is running on port", port);
+        });
+    } catch (error) {
+        console.error("Failed to start server:", error);
+        process.exit(1);
+    }
+};
+
+startServer();
