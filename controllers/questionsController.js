@@ -162,25 +162,50 @@ router.post("/createquestion", authMiddleware, async (req, res) => {
 
 router.get("/getallquestions", async (req, res) => {
     try {
-        const questionsResult = await pool.query(
-            `
-            SELECT
-                q.id AS question_id,
-                q.question,
-                q.created_at,
-                u.id AS user_id,
-                u.username,
-                o.id AS option_id,
-                o.text AS option_text,
-                o.votes AS option_votes
-            FROM questions q
-            INNER JOIN users u ON u.id = q.user_id
-            LEFT JOIN options o ON o.question_id = q.id
-            ORDER BY q.created_at DESC, o.id ASC
-            `
-        );
+        const [questionsResult, votesResult] = await Promise.all([
+            pool.query(
+                `
+                SELECT
+                    q.id AS question_id,
+                    q.question,
+                    q.created_at,
+                    u.id AS user_id,
+                    u.username,
+                    o.id AS option_id,
+                    o.text AS option_text,
+                    o.votes AS option_votes
+                FROM questions q
+                INNER JOIN users u ON u.id = q.user_id
+                LEFT JOIN options o ON o.question_id = q.id
+                ORDER BY q.created_at DESC, o.id ASC
+                `
+            ),
+            pool.query(
+                `
+                SELECT question_id, user_id, option_id
+                FROM votes
+                ORDER BY id ASC
+                `
+            )
+        ]);
 
-        res.status(200).json(mapQuestions(questionsResult.rows));
+        const votesMap = new Map();
+        for (const vote of votesResult.rows) {
+            if (!votesMap.has(vote.question_id)) {
+                votesMap.set(vote.question_id, []);
+            }
+            votesMap.get(vote.question_id).push({
+                userId: vote.user_id,
+                optionId: vote.option_id
+            });
+        }
+
+        const questions = mapQuestions(questionsResult.rows);
+        for (const question of questions) {
+            question.hasvoted = votesMap.get(question.id) || [];
+        }
+
+        res.status(200).json(questions);
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: "Internal server error", success: false });
@@ -195,8 +220,12 @@ router.post("/votequestion", authMiddleware, async (req, res) => {
         const optionId = Number(req.body.optionId);
         const userId = Number(req.user.id);
 
-        if (!Number.isInteger(questionId) || !Number.isInteger(optionId)) {
-            return res.status(400).json({ message: "Invalid questionId or optionId", success: false });
+        if (!Number.isInteger(questionId)) {
+            return res.status(400).json({ message: "Invalid questionId", success: false });
+        }
+
+        if(!Number.isInteger(optionId)){
+            return res.status(400).json({ message: "Invalid optionId", success: false });
         }
 
         await client.query("BEGIN");
